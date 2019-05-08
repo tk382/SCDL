@@ -15,13 +15,14 @@ from keras.initializers import Constant
 from keras import backend as K
 import tensorflow as tf
 
-from .loss import NB, ZINB
+from .loss import NB, ZINB, decayModel
 from .layers import ConstantDispersionLayer, SliceLayer, ColwiseMultLayer, ElementwiseDense
 
 
 #give upper and lower bound for numerical stability
 MeanAct = lambda x: tf.clip_by_value(K.exp(x), 1e-5, 1e6) 
 DispAct = lambda x: tf.clip_by_value(tf.nn.softplus(x), 1e-4, 1e4)
+PiAct = lambda x: tf.clip_by_value(x, 0.0, 1.0) 
 
 import tensorflow as tf
 
@@ -36,6 +37,8 @@ DispAct = lambda x: tf.clip_by_value(tf.nn.softplus(x), 1e-4, 1e4)
 class Autoencoder():
     def __init__(self,
                  input_size,
+                 curve=None,
+                 pi = None,
                  output_size=None,
                  hidden_size=(64, 32, 64),
                  l2_coef = 0.,
@@ -67,6 +70,8 @@ class Autoencoder():
         self.sf_layer = None
         self.debug = debug
         self.nonmissing_indicator = nonmissing_indicator
+        self.curve = curve
+        self.pi = pi
 
         if self.output_size is None:
             self.output_size = input_size
@@ -210,41 +215,38 @@ class ZINBConstantDispAutoencoder(Autoencoder):
 
 
 
+class DecayModelAutoencoder(Autoencoder):
 
+    def build_output(self):
+        curve = self.curve
+        pi    = self.pi
+        curve = tf.cast(curve, tf.float32)
+        mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
+                       kernel_regularizer=l1_l2(self.l1_coef, self.l2_coef),
+                       name='mean')(self.decoder_output)
 
+        # NB dispersion layer
+        disp = ConstantDispersionLayer(name='dispersion')
+        mean = disp(mean)
+        
+        pi = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * mean))
+        output = ColwiseMultLayer([mean, self.sf_layer])
 
-# class DecayModelAutoencoder(Autoencoder):
-# 
-#     def build_output(self):
-#         # pi = Dense(self.output_size, activation='sigmoid', kernel_initializer=self.init,
-#         #                kernel_regularizer=l1_l2(self.l1_coef, self.l2_coef),
-#         #                name='pi')(self.decoder_output)
-# 
-#         mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
-#                        kernel_regularizer=l1_l2(self.l1_coef, self.l2_coef),
-#                        name='mean')(self.decoder_output)
-# 
-#         # NB dispersion layer
-#         disp = ConstantDispersionLayer(name='dispersion')
-#         mean = disp(mean)
-# 
-#         output = ColwiseMultLayer([mean, self.sf_layer])
-# 
-#         zinb = ZINB(pi = pi, theta=disp.theta_exp, ridge_lambda=self.ridge, debug=self.debug)
-#         self.loss = zinb.loss
-#         self.extra_models['pi'] = Model(inputs=self.input_layer, outputs=pi)
-#         self.extra_models['dispersion'] = lambda :K.function([], [zinb.theta])([])[0].squeeze()
-#         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
-#         self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
-#         self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
-# 
-# 
-#     def predict(self, adata, colnames=None, **kwargs):
-#         colnames = adata.var_names.values if colnames is None else colnames
-#         rownames = adata.obs_names.values
-#         res = super().predict(adata, colnames=colnames, **kwargs)
-# 
-#         res['dispersion'] = self.extra_models['dispersion']()
-#         res['pi'] = self.extra_models['pi'].predict(adata.X)
-#   
-#         return res
+        zinb = decayModel(pi = pi, curve = curve, theta=disp.theta_exp, debug=self.debug)
+        
+        self.loss = zinb.loss
+        self.pi = zinb.pi
+
+        self.extra_models['dispersion'] = lambda :K.function([], [zinb.theta])([])[0].squeeze()
+        self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
+        self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
+        self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
+
+    def predict(self, adata, colnames=None, **kwargs):
+        colnames = adata.var_names.values if colnames is None else colnames
+        rownames = adata.obs_names.values
+        res = super().predict(adata, colnames=colnames, **kwargs)
+
+        res['dispersion'] = self.extra_models['dispersion']()
+
+        return res

@@ -12,10 +12,12 @@
 #' @return RDS file saved for the autoencoder prediction + filtering result
 #' @export
 computePrediction <- function(text.file.name,
+                              curve,
 							  model.nodes.ID = NULL,
                 is.large.data = F,
                 clearup.python.session = T,
                 batch_size = NULL,
+							  curve_file_name = NA,
 							  ...) {
   ### import Python module ###
   sctransfer_tae <- reticulate::import("working_codes")
@@ -60,12 +62,19 @@ computePrediction <- function(text.file.name,
   } else{
     batch_size <- as.integer(batch_size)
   }
-  used.time <- system.time(result <- autoFilterCV(data$mat,
-												 sctransfer_tae,
-												 main,
-												 out_dir = out_dir,
-                         batch_size = batch_size,
-                         write_output_to_tsv = write_output_to_tsv))
+	curve = fit_decay(data$mat)
+	if(is.na(curve_file_name)){
+	  curve_file_name = gsub(format, "_curve.txt", text.file.name)
+	}
+	write.table(curve$estimate, curve_file_name, col.names=FALSE, row.names=FALSE)
+  
+	used.time <- system.time(result <- autoFilterCV(data$mat,
+                                                  curve_file_name,
+												                          sctransfer_tae,
+												                          main,
+												                          out_dir = out_dir,
+                                                  batch_size = batch_size,
+                                                  write_output_to_tsv = write_output_to_tsv))
     rm(data)
     gc()
 
@@ -82,7 +91,7 @@ sys.modules[__name__].__dict__.clear()")
 
   
 
-  temp.name <- gsub(format, "prediction.rds", text.file.name)
+  temp.name <- gsub(format, "prediction_tae.rds", text.file.name)
 	saveRDS(result, file = temp.name)
   print(paste("Predicted + filtered results saved as:", temp.name))
   try(file.remove(paste0(out_dir, "/SAVERX_temp.mtx")))

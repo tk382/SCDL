@@ -13,6 +13,7 @@
 #'
 #' @export
 autoencode <- function(x, 
+                       curve_file_name,
                        python.module,
                        main,
                        test.x = NULL,  
@@ -21,6 +22,19 @@ autoencode <- function(x,
                        batch_size = 32L,
                        write_output_to_tsv = F,
                        ...) {
+  
+  # x.autoencoder = autoencode(x[, train.idx],
+  #                            curve_file_name=curve_file_name,
+  #                            sctransfer_tae,
+  #                            main,
+  #                            x.test,
+  #                            nonmissing_indicator,
+  #                            out_dir,
+  #                            batch_size,
+  #                            write_output_to_tsv,
+  #                            verbose_sum = F, verbose_fit = 0L)
+  
+  print(curve_file_name)
 
   api <- python.module$api
   print(api)
@@ -44,8 +58,8 @@ autoencode <- function(x,
   } else {
     test_mtx_file <- NULL
   }
-  
   tmp = api$autoencode(mtx_file = mtx_file,
+                       curve_file_name = curve_file_name,
                        pred_mtx_file = test_mtx_file,
                        nonmissing_indicator = 1,                      
                        out_dir = out_dir,
@@ -55,7 +69,7 @@ autoencode <- function(x,
   x.autoencoder = list()
   x.autoencoder$result = t(tmp[[1]])
   x.autoencoder$dispersion = tmp[[2]]
-  x.autoencoder$pi = tmp[[3]]
+  x.autoencoder$pi = t(tmp[[3]])
 
   reticulate::py_run_string("
 import gc

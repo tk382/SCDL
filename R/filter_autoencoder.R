@@ -10,6 +10,7 @@
 #' @export
 
 autoFilterCV <- function(x,
+                         curve_file_name,
                          python.module,
                          main,
                          nonmissing_indicator = 1,
@@ -49,6 +50,7 @@ autoFilterCV <- function(x,
     # batch_size = 32L,
     # write_output_to_tsv = F,
     x.autoencoder = autoencode(x[, train.idx],  
+                               curve_file_name,
                                 python.module,
                                 main,
                                 x.test,
@@ -90,6 +92,7 @@ autoFilterCV <- function(x,
 
   print("Final prediction round using all cells. See below the summary of the autoencoder model:")
   x.autoencoder <- autoencode(x,  
+                              curve_file_name,
                               python.module,
                               main,
                               NULL,
