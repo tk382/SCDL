@@ -25,7 +25,7 @@ def train(adata,
           early_stop=6, 
           batch_size=32, 
           clip_grad=5., 
-          save_weights=False,
+          save_weights=True,
           nonmissing_indicator = None,
           tensorboard=False, 
           verbose=True, verbose_sum = True, verbose_fit = 1, **kwargs):
@@ -48,8 +48,10 @@ def train(adata,
 
     # Callbacks
     callbacks = []
+    print(output_dir)
 
     if save_weights and output_dir is not None:
+        print("inside if")
         checkpointer = ModelCheckpoint(filepath="%s/weights.hdf5" % output_dir,
                                        verbose=verbose,
                                        save_weights_only=True,

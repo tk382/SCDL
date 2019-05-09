@@ -18,6 +18,8 @@ autoFilterCV <- function(x,
                          batch_size = 32L,
                          write_output_to_tsv = F,
                          fold = 6, samp = 3, epsilon = 1e-10, seed = 1, ...) {
+  
+  print(out_dir)
 
   set.seed(seed)
 
@@ -37,18 +39,6 @@ autoFilterCV <- function(x,
     test.idx = idx.perm[((i-1)*n.test + 1):(i * n.test)]
 
     x.test = x[, test.idx]
-    # x, 
-    # python.module,
-    # main,
-    # test.x = NULL,  
-    # nonmissing_indicator = 1, 
-    # n_human=21183L,
-    # n_mouse=21122L,
-    # shared_size=15494L,
-    # model.species = NULL,
-    # out_dir = ".",
-    # batch_size = 32L,
-    # write_output_to_tsv = F,
     x.autoencoder = autoencode(x[, train.idx],  
                                curve_file_name,
                                 python.module,

@@ -13,12 +13,13 @@
 #' @export
 computePrediction <- function(text.file.name,
                               curve,
-							  model.nodes.ID = NULL,
-                is.large.data = F,
-                clearup.python.session = T,
-                batch_size = NULL,
-							  curve_file_name = NA,
-							  ...) {
+							                model.nodes.ID = NULL,
+                              is.large.data = F,
+                              clearup.python.session = T,
+                              batch_size = NULL,
+							                curve_file_name = NA,
+							                save_weights = TRUE,
+							                ...) {
   ### import Python module ###
   sctransfer_tae <- reticulate::import("working_codes")
   
@@ -38,12 +39,16 @@ computePrediction <- function(text.file.name,
 	preprocessDat(text.file.name,
 				  model.nodes.ID = model.nodes.ID)
 	
+  
+  out_dir <- strsplit(text.file.name, split = "/")[[1]]
+  out_dir <- paste(out_dir[-length(out_dir)], collapse = "/")
+  if (out_dir == ""){
+      out_dir <- "."
+  }
+  
+	
+	print(out_dir)
 
-	out_dir <- strsplit(text.file.name, split = "/")[[1]]
-	out_dir <- paste(out_dir[-length(out_dir)], collapse = "/")
-	if (out_dir == ""){
-	  out_dir <- "."
-	}
 	print("Data preprocessed ...")
 	######
 
@@ -89,11 +94,10 @@ sys.modules[__name__].__dict__.clear()")
     print("Python module cleared up.")
   }
 
-  
-
-  temp.name <- gsub(format, "prediction_tae.rds", text.file.name)
-	saveRDS(result, file = temp.name)
-  print(paste("Predicted + filtered results saved as:", temp.name))
+  # if(is.na(output_name)){
+  #   output_name = gsub(format, "prediction_tae.rds", text.file.name)
+  # }
+	saveRDS(result, file = gsub(format, "_prediction_tae.rds", text.file.name))
   try(file.remove(paste0(out_dir, "/SAVERX_temp.mtx")))
   try(file.remove(paste0(out_dir, "/SAVERX_temp_test.mtx")))
   if (is.large.data) {

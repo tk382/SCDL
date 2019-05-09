@@ -12,14 +12,15 @@ saverx_tae <- function(text.file.name,
 				   model.nodes.ID = NULL,
            is.large.data = F,
            verbose = F, batch_size = NULL, 
-           clearup.python.session = T, ...) {
+				   working_directory = ".",
+           clearup.python.session = T,
+				   ...) {
   
   computePrediction(text.file.name, 
                     model.nodes.ID, 
-                    verbose = verbose,
                     is.large.data = is.large.data, 
                     batch_size = batch_size,
-                    clearup.python.session = clearup.python.session, 
+                    clearup.python.session = clearup.python.session,
                     ...)
 
 }

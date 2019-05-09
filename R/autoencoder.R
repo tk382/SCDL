@@ -23,18 +23,6 @@ autoencode <- function(x,
                        write_output_to_tsv = F,
                        ...) {
   
-  # x.autoencoder = autoencode(x[, train.idx],
-  #                            curve_file_name=curve_file_name,
-  #                            sctransfer_tae,
-  #                            main,
-  #                            x.test,
-  #                            nonmissing_indicator,
-  #                            out_dir,
-  #                            batch_size,
-  #                            write_output_to_tsv,
-  #                            verbose_sum = F, verbose_fit = 0L)
-  
-  print(curve_file_name)
 
   api <- python.module$api
   print(api)
