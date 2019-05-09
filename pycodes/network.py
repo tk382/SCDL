@@ -22,7 +22,7 @@ from .layers import ConstantDispersionLayer, SliceLayer, ColwiseMultLayer, Eleme
 #give upper and lower bound for numerical stability
 MeanAct = lambda x: tf.clip_by_value(K.exp(x), 1e-5, 1e6) 
 DispAct = lambda x: tf.clip_by_value(tf.nn.softplus(x), 1e-4, 1e4)
-PiAct = lambda x: tf.clip_by_value(x, 0.0, 1.0) 
+PiAct = lambda x: tf.clip_by_value(x, 0.0, 0.95) 
 
 import tensorflow as tf
 
@@ -173,6 +173,7 @@ class NBConstantDispAutoencoder(Autoencoder):
         res = super().predict(adata, colnames=colnames, **kwargs)
 
         res['dispersion'] = self.extra_models['dispersion']()
+        
   
         return res
 
@@ -219,7 +220,6 @@ class DecayModelAutoencoder(Autoencoder):
 
     def build_output(self):
         curve = self.curve
-        pi    = self.pi
         curve = tf.cast(curve, tf.float32)
         mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
                        kernel_regularizer=l1_l2(self.l1_coef, self.l2_coef),
@@ -232,11 +232,10 @@ class DecayModelAutoencoder(Autoencoder):
         pi = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * mean))
         output = ColwiseMultLayer([mean, self.sf_layer])
 
-        zinb = decayModel(pi = pi, curve = curve, theta=disp.theta_exp, debug=self.debug)
+        zinb = decayModel(pi = pi, curve = curve, theta=disp.theta_exp, debug=self.debug) #loss function
         
         self.loss = zinb.loss
-        self.pi = zinb.pi
-
+        self.extra_models['pi'] = (tf.Session().run(self.pi))
         self.extra_models['dispersion'] = lambda :K.function([], [zinb.theta])([])[0].squeeze()
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
         self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
@@ -248,5 +247,6 @@ class DecayModelAutoencoder(Autoencoder):
         res = super().predict(adata, colnames=colnames, **kwargs)
 
         res['dispersion'] = self.extra_models['dispersion']()
+        res['pi'] = self.extra_models['pi']
 
         return res

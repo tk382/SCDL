@@ -35,6 +35,8 @@ def autoencode(adata = None,
                data_name = "",
                nonmissing_indicator = None): ###############
                
+    print(out_dir)
+               
     curve = np.loadtxt(curve_file_name)
     print(curve)
 
@@ -160,10 +162,7 @@ def autoencode(adata = None,
         
         output_mean = res['mean_norm']
         output_dispersion = res['dispersion']
-        outputmean_tensor = tf.convert_to_tensor(output_mean)
-
-        output_pi_tensor = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2])*outputmean_tensor))
-        output_pi = (tf.Session().run(output_pi_tensor))
+        output_pi = res['pi']
         
         pred_adata.obsm['X_dca'] = res['mean_norm']
         del net,loss
@@ -185,11 +184,7 @@ def autoencode(adata = None,
     
     output_mean = res['mean_norm']
     output_dispersion = res['dispersion']
-    outputmean_tensor = tf.convert_to_tensor(output_mean)
-
-    output_pi_tensor = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2])*outputmean_tensor))
-    output_pi = (tf.Session().run(output_pi_tensor))
-    output_pi = output_pi
+    output_pi = res['pi']
     
     if write_output_to_tsv:
         print('Saving files ...')

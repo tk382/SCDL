@@ -12,7 +12,7 @@ def _nelem(x):
     nelem = tf.reduce_sum(tf.cast(~tf.is_nan(x), tf.float32)) #number of elements
     return tf.cast(tf.where(tf.equal(nelem, 0.), 1., nelem), x.dtype)
 
-PiAct = lambda x: tf.clip_by_value(x, 0, 1) 
+PiAct = lambda x: tf.clip_by_value(x, 0, 0.95) 
 
 class NB(object):
     def __init__(self, curve = None, theta=None, masking=False, scope='nbinom_loss/',
@@ -115,7 +115,7 @@ class decayModel(NB):
         eps = self.eps
         curve = self.curve
         curve = tf.cast(curve, tf.float32)
-        self.pi = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * y_pred))
+        # self.pi = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * y_pred))
         with tf.name_scope(self.scope):
             nb_case = super().loss(y_true, y_pred, mean=False) - tf.log(1.0 - self.pi + eps)
             y_true = tf.cast(y_true, tf.float32)
