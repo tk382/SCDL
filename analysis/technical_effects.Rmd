@@ -1,0 +1,1120 @@
+---
+title: "effects of normalization in technical artifacts"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+library(Matrix)
+library(gplots)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(broom)
+library(ggpubr)
+library(data.table)
+get_positive_mean = function(x){
+  ind = which( x > 0)
+  if(length(ind) > 0){
+    mean(x[ind])
+  }else{
+    return(0)
+  }
+}
+preprocess = function(X, label, normalize){
+  if(normalize){
+    X = X/rowSums(X) * 3000
+  }
+  Y = X
+  X = X>0 * 1
+
+  numcounts = colSums(X)
+  ind = which(numcounts == 0)
+  if(length(ind) > 0){
+    X = X[, -ind]
+    Y = Y[, -ind]
+  }
+  X = as.data.frame(X)
+  Y = as.data.frame(Y)
+
+  X$label = label
+  Y$label = label
+
+  det_rate = t(aggregate(X[, -ncol(X)], list(X$label), mean))
+  gene_mean = t(aggregate(Y[, -ncol(Y)], list(Y$label), get_positive_mean))
+  gc()
+  
+  colnames(det_rate) = det_rate[1,]
+  colnames(gene_mean) = gene_mean[1,]
+
+  det_rate = det_rate[-1,]
+  gene_mean = gene_mean[-1, ]
+
+  det_rate = apply(det_rate, 2, as.numeric)
+  gene_mean = apply(gene_mean, 2, as.numeric)
+
+  dropout_rate = det_rate
+  dropout_rate[, 1:length(unique(label))] = 1-dropout_rate[, 1:length(unique(label))]
+
+  rm(X, Y); gc()
+
+  gene_mean = as.data.frame(gene_mean)
+  det_rate = as.data.frame(det_rate)
+  dropout_rate = as.data.frame(dropout_rate)
+
+  gene_mean$id = paste0('gene', 1:nrow(gene_mean))
+  det_rate$id = paste0('gene', 1:nrow(det_rate))
+  dropout_rate$id = paste0('gene', 1:nrow(dropout_rate))
+
+  mgm = melt(gene_mean)
+  mdr = melt(det_rate)
+  mdor = melt(dropout_rate)
+
+  df = data.frame(gene = mgm$id,
+                  celltype = mgm$variable,
+                  det_rate = mdr$value,
+                  gene_mean = mgm$value,
+                  dropout_rate = mdor$value)
+
+  return(df)
+}
+```
+
+
+
+
+# Data set 1: 10X purified cells
+
+```{r}
+X = readMM("../data/10X_pbmc_filtered/matrix.mtx")
+X = as.matrix(X)
+X = t(X)
+label = read.table("../data/10X_pbmc_filtered/truelabel.tsv")$V1
+rm(orig)
+df = preprocess(X, label=label, normalize = FALSE)
+df2 = preprocess(X, label = label, normalize = TRUE)
+
+rm(X); gc()
+table(label)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0") +
+  ggtitle("dropout rates vs gene mean")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B", "helperT")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("two celltypes selected")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B", "helperT")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g1 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ylim(c(0,1)) + 
+  ggtitle("fitted exponential decay")
+
+
+
+df = df2
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g2 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ggtitle("normalized") + 
+  ylim(c(0,1))
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+```
+
+# Data set 2 : 10X 68K cells
+
+```{r}
+X = readMM("../data/10X_68K/filtered_matrix/hg19/matrix.mtx")
+barcodes = read.table("../data/10X_68K/filtered_matrix/hg19/barcodes.tsv", sep = "\t")
+genes = read.table("../data/10X_68K/filtered_matrix/hg19/genes.tsv", sep = "\t")
+annotation = read.table("../data/10X_68K/filtered_matrix/hg19/barocdes_annotation.tsv", sep = "\t", header = TRUE)
+label = annotation$celltype
+
+X = t(as.matrix(X))
+df = preprocess(X, label=label, normalize = FALSE)
+df2 = preprocess(X, label = label, normalize = TRUE)
+
+rm(X); gc()
+table(label)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0") +
+  ggtitle("dropout rates vs gene mean")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("CD19+ B", "CD4+/CD45RO+ Memory")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("two celltypes selected")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("CD19+ B", "CD4+/CD45RO+ Memory")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g1 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ylim(c(0,1)) + 
+  ggtitle("fitted exponential decay")
+
+
+df = df2
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g2 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ggtitle("normalized") + 
+  ylim(c(0,1))
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+```
+
+
+# Data Set 3 : GSE76381 Developmental Midbrain
+
+```{r}
+x = fread("../data/GSE76381/GSE76381_ESMoleculeCounts.cef.txt.gz")
+X = x[-(1:4), -2]
+X = matrix(NA, nrow(X)-1, ncol(X) - 1)
+label = as.character(x[3, -(1:2)])
+X = (as.matrix(x[6:nrow(x), 3:ncol(x)]))
+X = apply(X, 2, as.numeric)
+rownames(X) = x$V1[-(1:5)]
+colnames(X) = x[2, -(1:2)]
+rm(x); gc()
+
+X = t(X)
+df = preprocess(X, label=label, normalize = FALSE)
+df2 = preprocess(X, label = label, normalize = TRUE)
+
+rm(X); gc()
+table(label)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0") +
+  ggtitle("dropout rates vs gene mean")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>%  filter(celltype %in% c("eNb1", "eSCa")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("two celltypes selected")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>%  filter(celltype %in% c("eNb1", "eSCa")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g1 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ylim(c(0,1)) + 
+  ggtitle("fitted exponential decay")
+
+
+df = df2
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g2 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ggtitle("normalized") + 
+  ylim(c(0,1))
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+```
+
+
+
+
+# Data 4 : GSE114724 Diverse Immune Phenotypes in the Breast Tumor Microenvironment
+
+## subpart 1 : Patient BC09 Tumor 1
+
+```{r}
+X = readRDS("../data/GSE114724/GSE114724_CLEANED/bc09_tumor1.rds")
+label = read.table("../data/GSE114724/GSE114724_CLEANED/bc09_tumor1_label.txt", stringsAsFactors = FALSE)$V1
+X = t(as.matrix(X))
+df = preprocess(X, label=label, normalize = FALSE)
+df2 = preprocess(X, label = label, normalize = TRUE)
+
+rm(X); gc()
+table(label)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0") +
+  ggtitle("dropout vs gene mean")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+
+
+
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g1 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ylim(c(0,1)) + 
+  ggtitle("not normalized")
+
+
+
+df = df2
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g2 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ggtitle("normalized") + 
+  ylim(c(0,1))
+
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+```
+
+
+## subpart 2 : Patient BC09 Tumor 2
+
+```{r, echo = FALSE}
+X = readRDS("../data/GSE114724/GSE114724_CLEANED/bc09_tumor2.rds")
+label = read.table("../data/GSE114724/GSE114724_CLEANED/bc09_tumor2_label.txt", stringsAsFactors = FALSE)$V1
+X = t(as.matrix(X))
+df = preprocess(X, label=label, normalize = FALSE)
+df2 = preprocess(X, label = label, normalize = TRUE)
+
+rm(X); gc()
+table(label)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0") +
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g1 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ylim(c(0,1)) + 
+  ggtitle("not normalized")
+
+
+
+df = df2
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g2 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ggtitle("normalized") + 
+  ylim(c(0,1))
+
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+```
+
+
+## subpart 3 : Patient BC10 Tumor 1
+
+```{r, echo = FALSE}
+X = readRDS("../data/GSE114724/GSE114724_CLEANED/bc10_tumor1.rds")
+label = read.table("../data/GSE114724/GSE114724_CLEANED/bc10_tumor1_label.txt", stringsAsFactors = FALSE)$V1
+X = t(as.matrix(X))
+df = preprocess(X, label=label, normalize = FALSE)
+df2 = preprocess(X, label = label, normalize = TRUE)
+
+rm(X); gc()
+table(label)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0") +
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g1 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ylim(c(0,1)) + 
+  ggtitle("not normalized")
+
+
+
+df = df2
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g2 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ggtitle("normalized") + 
+  ylim(c(0,1))
+
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+```
+
+
+## subpart 4 : Patient BC11 Tumor 1
+
+```{r, echo = FALSE}
+X = readRDS("../data/GSE114724/GSE114724_CLEANED/bc11_tumor1.rds")
+label = read.table("../data/GSE114724/GSE114724_CLEANED/bc11_tumor1_label.txt", stringsAsFactors = FALSE)$V1
+X = t(as.matrix(X))
+df = preprocess(X, label=label, normalize = FALSE)
+df2 = preprocess(X, label = label, normalize = TRUE)
+
+rm(X); gc()
+table(label)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0") +
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g1 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ylim(c(0,1)) + 
+  ggtitle("not normalized")
+
+
+
+df = df2
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g2 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ggtitle("normalized") + 
+  ylim(c(0,1))
+
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+```
+
+
+## subpart 5 : Patient BC11 Tumor 2
+
+```{r, echo = FALSE}
+X = readRDS("../data/GSE114724/GSE114724_CLEANED/bc11_tumor2.rds")
+label = read.table("../data/GSE114724/GSE114724_CLEANED/bc11_tumor2_label.txt", stringsAsFactors = FALSE)$V1
+X = t(as.matrix(X))
+df = preprocess(X, label=label, normalize = FALSE)
+df2 = preprocess(X, label = label, normalize = TRUE)
+
+rm(X); gc()
+table(label)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0") +
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(gene_mean<10)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+tmpdf = df %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g1 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("not normalized")
+
+tmpdf = df2 %>% filter(dropout_rate < 0.95) %>% filter(dropout_rate > 0.05) %>% filter(celltype %in% c("B:", "NEUTROPHIL:")) %>% filter(gene_mean<4)
+tmpdf = tmpdf[sample(1:nrow(tmpdf)), ]
+g2 = ggplot(tmpdf, 
+       aes(x=gene_mean, y=dropout_rate, col = celltype)) +
+  geom_point(alpha = 0.4) + 
+  ylab("drop out rate") +
+  xlab("mean(X) for X>0")+
+  ggtitle("normalized")
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g1 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ylim(c(0,1)) + 
+  ggtitle("not normalized")
+
+
+
+df = df2
+df$range = cut(df$dropout_rate, seq(0.01,0.99,length=99), include.lowest=TRUE)
+df = df%>% group_by(range, celltype) %>% summarize(var = var(gene_mean), mean = mean(gene_mean))
+
+df$range = as.character(df$range)
+df$minrange = substring(sapply(strsplit(df$range, ','), function(x) x[1]), 2)
+df$maxrange = gsub('.{1}$', '', sapply(strsplit(df$range, ','), function(x) x[2]) )
+df$minrange = as.numeric(df$minrange)
+df$maxrange = as.numeric(df$maxrange)
+df$mean_dropout_rate = (df$minrange + df$maxrange) / 2
+
+fitdf = df %>% group_by(celltype) %>%  do(decayfit = nls(mean_dropout_rate ~ SSasymp(mean, yf, y0, log_alpha), data=.))
+decayfit_tidy = broom::tidy(fitdf, decayfit)
+
+fitted = list()
+
+newdf = data.frame(range = NA, celltype = NA, var = NA, mean = NA, minrange = NA, maxrange = NA, mean_dropout_rate = NA, fitted = NA)
+for (t in 1:length(table(label))){
+  tmp = df %>% filter(celltype==names(table(label))[t])
+  tmp$fitted = predict(fitdf$decayfit[t][[1]], newdata = tmp)
+  newdf = rbind(newdf, as.data.frame(tmp))
+}
+newdf = newdf[-1, ]
+
+ind = sort(newdf$mean_dropout_rate, index.return=TRUE)$ix
+newdf = newdf[ind, ]
+newdf = newdf %>% filter(mean < 7)
+g2 = ggplot(newdf%>% filter(mean<7), aes(x=mean, y=mean_dropout_rate, col=celltype)) + 
+  geom_point(alpha = 0.5) + geom_line(aes(x=mean, y=fitted, col=celltype), lwd=2, alpha = 0.3) +
+  ylab("dropout rate") +
+  xlab("gene mean") +
+  ggtitle("normalized") + 
+  ylim(c(0,1))
+
+
+ggarrange(g1, g2, nrow=1, ncol=2, common.legend=TRUE)
+
+```
