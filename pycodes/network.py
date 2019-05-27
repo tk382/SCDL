@@ -121,12 +121,10 @@ class Autoencoder():
         self.loss = mean_squared_error
         mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
                      name='mean')(self.decoder_output)
-        # output = ColWiseMultLayer(name='output')([mean, self.sf_layer])
         output = ColWiseMultLayer(name='output')([mean])
 
         # keep unscaled output as an extra model
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
-        # self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
         self.model = Model(inputs=self.input_layer, outputs=output)
 
 
@@ -142,8 +140,6 @@ class Autoencoder():
         res = {}
         colnames = adata.var_names.values if colnames is None else colnames
         rownames = adata.obs_names.values
-
-   #     print('Calculating reconstructions...')
 
         res['mean_norm'] = self.extra_models['mean_norm'].predict(adata.X)
         
@@ -167,7 +163,6 @@ class NBConstantDispAutoencoder(Autoencoder):
         self.extra_models['dispersion'] = lambda :K.function([], [nb.theta])([])[0].squeeze()
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
         self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
-        # self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
         self.model = Model(inputs=self.input_layer, outputs=output)
 
 
@@ -197,7 +192,6 @@ class ZINBConstantDispAutoencoder(Autoencoder):
         disp = ConstantDispersionLayer(name='dispersion')
         mean = disp(mean)
 
-        # output = ColwiseMultLayer([mean, self.sf_layer])
         output = ColwiseMultLayer([mean])
 
         zinb = ZINB(pi=pi, theta=disp.theta_exp, ridge_lambda=self.ridge, debug=self.debug)
@@ -206,7 +200,6 @@ class ZINBConstantDispAutoencoder(Autoencoder):
         self.extra_models['dispersion'] = lambda :K.function([], [zinb.theta])([])[0].squeeze()
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
         self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
-        # self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
         self.model = Model(inputs=self.input_layer, outputs=output)
 
 
