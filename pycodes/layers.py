@@ -83,7 +83,8 @@ class ElementwiseDense(Dense):
 
 
 nan2zeroLayer = Lambda(lambda x: tf.where(tf.is_nan(x), tf.zeros_like(x), x))
-ColwiseMultLayer = Lambda(lambda l: l[0]*tf.reshape(l[1], (-1,1)))
+# ColwiseMultLayer = Lambda(lambda l: l[0]*tf.reshape(l[1], (-1,1)))
+ColwiseMultLayer = Lambda(lambda l: l[0])
 
 # from keras.engine.topology import Layer
 # from keras.layers import Lambda, Dense

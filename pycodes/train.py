@@ -2,7 +2,7 @@
 
 import os
 
-from .loss import NB, ZINB
+from .loss import NB, ZINB, decayModel
 #from hyper import hyper
 
 import numpy as np
@@ -71,9 +71,9 @@ def train(adata,
     if verbose_sum:
         network.model.summary()
 
-    inputs = {'count': adata.X, 'size_factors': adata.obs.size_factors}
+    inputs = {'count': adata.X.A}
 
-    output = adata.raw.X
+    output = adata.X.A
 
     if train_on_full:
         validation_split = 0
@@ -89,10 +89,10 @@ def train(adata,
                      verbose=verbose_fit,
                      **kwargs)
                      
-    pi = network.pi
-    print(type(pi))
+    # pi = network.pi
     
     # https://github.com/tensorflow/tensorflow/issues/3388
     # K.clear_session()
 
     return loss, network.pi
+    # return loss

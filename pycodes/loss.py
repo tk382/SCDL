@@ -103,9 +103,6 @@ class ZINB(NB):
 
 
 class decayModel(NB):
-    # ZINB is a subclass(?) of NB and there could be no extra work to be done.
-    # *Given pi* this computes the loss. So loss computation remains the same
-    # how do we incoroprate oen extra parameter?
     def __init__(self, curve, pi, scope='decay_loss/', **kwargs):
         super().__init__(scope = scope, **kwargs)
         self.pi = pi

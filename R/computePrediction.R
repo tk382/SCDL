@@ -12,16 +12,16 @@
 #' @return RDS file saved for the autoencoder prediction + filtering result
 #' @export
 computePrediction <- function(text.file.name,
-                              curve,
 							                model.nodes.ID = NULL,
                               is.large.data = F,
                               clearup.python.session = T,
                               batch_size = NULL,
 							                curve_file_name = NA,
 							                save_weights = TRUE,
+							                output_directory = NA,
 							                ...) {
   ### import Python module ###
-  sctransfer_tae <- reticulate::import("working_codes")
+  sctransfer_tae <- reticulate::import("pycodes")
   
 	### inpute checking  ###
 	format <- strsplit(text.file.name, '[.]')[[1]]
@@ -30,14 +30,12 @@ computePrediction <- function(text.file.name,
 	  stop("Input file must be in .txt or .csv or .rds form", call.=FALSE)
 	}
 	print(paste("Input file is:", text.file.name))
-	data.species = "Human"
 
 	main <- reticulate::import_main(convert = F)
-	print("Python module sctransfer_tae imported ...")
-	######
+	print("Python module is imported ...")
 
-	preprocessDat(text.file.name,
-				  model.nodes.ID = model.nodes.ID)
+	# preprocessDat(text.file.name,
+	# 			  model.nodes.ID = model.nodes.ID)
 	
   
   out_dir <- strsplit(text.file.name, split = "/")[[1]]
@@ -45,9 +43,9 @@ computePrediction <- function(text.file.name,
   if (out_dir == ""){
       out_dir <- "."
   }
-  
-	
-	print(out_dir)
+#   
+# 	
+# 	print(out_dir)
 
 	print("Data preprocessed ...")
 	######
@@ -60,32 +58,34 @@ computePrediction <- function(text.file.name,
   }
 
 
-
-	data <- readRDS(gsub(format, "_temp.rds", text.file.name))
+  data = readRDS(text.file.name)
+	# data <- readRDS(gsub(format, "_temp.rds", text.file.name))
   if (is.null(batch_size)){
-    batch_size <- as.integer(max(ncol(data$mat) / 50, 32))
+    # batch_size <- as.integer(max(ncol(data$mat) / 50, 32))
+    batch_size <- as.integer(max(ncol(data) / 50, 32))
   } else{
     batch_size <- as.integer(batch_size)
   }
-	curve = fit_decay(data$mat)
+	curve = fit_decay(data)
 	if(is.na(curve_file_name)){
 	  curve_file_name = gsub(format, "_curve.txt", text.file.name)
 	}
 	write.table(curve$estimate, curve_file_name, col.names=FALSE, row.names=FALSE)
   
-	used.time <- system.time(result <- autoFilterCV(data$mat,
+	used.time <- system.time(result <- autoFilterCV(data,
+	                                                # data$mat,
                                                   curve_file_name,
 												                          sctransfer_tae,
 												                          main,
 												                          out_dir = out_dir,
                                                   batch_size = batch_size,
                                                   write_output_to_tsv = write_output_to_tsv))
-    rm(data)
-    gc()
+  rm(data)
+  gc()
 
-		print(paste("Autoencoder total computing time is:", used.time[3], "seconds"))
+	print(paste("Autoencoder total computing time is:", used.time[3], "seconds"))
 
-		print(paste("Number of predictive genes is", sum(result$err.const > result$err.autoencoder)))
+	print(paste("Number of predictive genes is", sum(result$err.const > result$err.autoencoder)))
 
   if (clearup.python.session) {
     reticulate::py_run_string("
@@ -98,6 +98,7 @@ sys.modules[__name__].__dict__.clear()")
   #   output_name = gsub(format, "prediction_tae.rds", text.file.name)
   # }
 	saveRDS(result, file = gsub(format, "_prediction_tae.rds", text.file.name))
+	# saveRDS(result, file = paste0(output_directory, gsub(format, "_prediction_tae.rds", text.file.name)))
   try(file.remove(paste0(out_dir, "/SAVERX_temp.mtx")))
   try(file.remove(paste0(out_dir, "/SAVERX_temp_test.mtx")))
   if (is.large.data) {

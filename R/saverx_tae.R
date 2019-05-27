@@ -14,6 +14,7 @@ saverx_tae <- function(text.file.name,
            verbose = F, batch_size = NULL, 
 				   working_directory = ".",
            clearup.python.session = T,
+				   save_weights = TRUE,
 				   ...) {
   
   computePrediction(text.file.name, 
@@ -21,6 +22,7 @@ saverx_tae <- function(text.file.name,
                     is.large.data = is.large.data, 
                     batch_size = batch_size,
                     clearup.python.session = clearup.python.session,
+                    save_weights = save_weights,
                     ...)
 
 }

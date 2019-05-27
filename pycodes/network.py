@@ -84,7 +84,7 @@ class Autoencoder():
     def build(self):
 
         self.input_layer = Input(shape=(self.input_size,), name='count')
-        self.sf_layer = Input(shape=(1,), name='size_factors')
+        # self.sf_layer = Input(shape=(1,), name='size_factors')
         last_hidden = self.input_layer
 
         if self.input_dropout > 0.0:
@@ -121,11 +121,13 @@ class Autoencoder():
         self.loss = mean_squared_error
         mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
                      name='mean')(self.decoder_output)
-        output = ColWiseMultLayer(name='output')([mean, self.sf_layer])
+        # output = ColWiseMultLayer(name='output')([mean, self.sf_layer])
+        output = ColWiseMultLayer(name='output')([mean])
 
         # keep unscaled output as an extra model
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
-        self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
+        # self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
+        self.model = Model(inputs=self.input_layer, outputs=output)
 
 
         ######## ADD WEIGHTS ###########
@@ -158,13 +160,15 @@ class NBConstantDispAutoencoder(Autoencoder):
         disp = ConstantDispersionLayer(name='dispersion')
         mean = disp(mean)
 
-        output = ColWiseMultLayer(name='output')([mean, self.sf_layer])
+        # output = ColWiseMultLayer(name='output')([mean, self.sf_layer])
+        output = ColWiseMultLayer(name='output')([mean])
 
         nb = NB(disp.theta_exp, nonmissing_indicator = self.nonmissing_indicator)
         self.extra_models['dispersion'] = lambda :K.function([], [nb.theta])([])[0].squeeze()
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
         self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
-        self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
+        # self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
+        self.model = Model(inputs=self.input_layer, outputs=output)
 
 
     def predict(self, adata, colnames=None, **kwargs):
@@ -193,7 +197,8 @@ class ZINBConstantDispAutoencoder(Autoencoder):
         disp = ConstantDispersionLayer(name='dispersion')
         mean = disp(mean)
 
-        output = ColwiseMultLayer([mean, self.sf_layer])
+        # output = ColwiseMultLayer([mean, self.sf_layer])
+        output = ColwiseMultLayer([mean])
 
         zinb = ZINB(pi=pi, theta=disp.theta_exp, ridge_lambda=self.ridge, debug=self.debug)
         self.loss = zinb.loss
@@ -201,7 +206,8 @@ class ZINBConstantDispAutoencoder(Autoencoder):
         self.extra_models['dispersion'] = lambda :K.function([], [zinb.theta])([])[0].squeeze()
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
         self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
-        self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
+        # self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
+        self.model = Model(inputs=self.input_layer, outputs=output)
 
 
     def predict(self, adata, colnames=None, **kwargs):
@@ -225,28 +231,29 @@ class DecayModelAutoencoder(Autoencoder):
                        kernel_regularizer=l1_l2(self.l1_coef, self.l2_coef),
                        name='mean')(self.decoder_output)
 
-        # NB dispersion layer
         disp = ConstantDispersionLayer(name='dispersion')
         mean = disp(mean)
         
         pi = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * mean))
-        output = ColwiseMultLayer([mean, self.sf_layer])
+        output = ColwiseMultLayer([mean])
 
         zinb = decayModel(pi = pi, curve = curve, theta=disp.theta_exp, debug=self.debug) #loss function
         
         self.loss = zinb.loss
-        self.extra_models['pi'] = (tf.Session().run(self.pi))
+        self.curve = self.curve
+        pi = zinb.pi
         self.extra_models['dispersion'] = lambda :K.function([], [zinb.theta])([])[0].squeeze()
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
         self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
-        self.model = Model(inputs=[self.input_layer, self.sf_layer], outputs=output)
+        self.model = Model(inputs=self.input_layer, outputs=output)
+        
 
     def predict(self, adata, colnames=None, **kwargs):
         colnames = adata.var_names.values if colnames is None else colnames
         rownames = adata.obs_names.values
         res = super().predict(adata, colnames=colnames, **kwargs)
-
+        curve = self.curve
+        res['pi'] = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * res['mean_norm']))
         res['dispersion'] = self.extra_models['dispersion']()
-        res['pi'] = self.extra_models['pi']
 
         return res

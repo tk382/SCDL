@@ -13,9 +13,9 @@ def read_dataset(adata, transpose=False, test_split = False, copy=False, verbose
         adata = sc.read(adata)
     else:
         raise NotImplementedError
-    
-    type_error = "Make sure that the dataset is of one of the two types: UMI, nonUMI(RPKM/TPM)"
-    assert adata.uns['data_type'] in ['UMI', 'nonUMI'], type_error
+    # 
+    # type_error = "Make sure that the dataset is of one of the two types: UMI, nonUMI(RPKM/TPM)"
+    # assert adata.uns['data_type'] in ['UMI', 'nonUMI'], type_error
     
     if transpose: adata = adata.transpose()
     
@@ -38,7 +38,7 @@ def read_dataset(adata, transpose=False, test_split = False, copy=False, verbose
     return adata
 
 
-def normalize(adata, filter_min_counts=True, size_factors=True, logtrans_input=True):
+def normalize(adata, filter_min_counts=True, logtrans_input=True):
     
     # remove genes that are 0 everywhere
     if filter_min_counts:
@@ -46,9 +46,6 @@ def normalize(adata, filter_min_counts=True, size_factors=True, logtrans_input=T
     
     # if nothing's stored as raw data, consider the current data as raw data
     if adata.raw is None:
-        if size_factors or logtrans_input:
-            adata.raw = adata.copy()
-        else:
             adata.raw = adata
     
     if adata.uns['data_type'] != 'nonUMI': 
@@ -57,11 +54,6 @@ def normalize(adata, filter_min_counts=True, size_factors=True, logtrans_input=T
     else: 
         #if not UMI (TPM, RPKM), n_counts is the column sum
         n_counts = adata.X.sum(axis = 1)
-    
-    # normalize the library size to 10000
-    if size_factors:
-        sc.pp.normalize_per_cell(adata, counts_per_cell_after = 10000)
-        adata.obs['size_factors'] = n_counts / 10000
         
     # log transform
     if logtrans_input:
