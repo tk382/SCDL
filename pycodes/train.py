@@ -3,8 +3,6 @@
 import os
 
 from .loss import NB, ZINB, decayModel
-#from hyper import hyper
-
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -12,7 +10,6 @@ import keras.optimizers as opt
 from keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from keras import backend as K
 from keras.preprocessing.image import Iterator
-
 
 def train(adata, 
           network, 
@@ -30,10 +27,6 @@ def train(adata,
           tensorboard=False, 
           verbose=True, verbose_sum = True, verbose_fit = 1, **kwargs):
 
-
-    #network is an object in decayModelAutoencoder
-    
-    # model = network.model
     loss = network.loss
     
     if output_dir is not None:
@@ -70,9 +63,7 @@ def train(adata,
 
     if verbose_sum:
         network.model.summary()
-
     inputs = {'count': adata.X.A}
-
     output = adata.X.A
 
     if train_on_full:
@@ -88,11 +79,6 @@ def train(adata,
                      validation_split=validation_split,
                      verbose=verbose_fit,
                      **kwargs)
-                     
-    # pi = network.pi
-    
-    # https://github.com/tensorflow/tensorflow/issues/3388
-    # K.clear_session()
+
 
     return loss, network.pi
-    # return loss

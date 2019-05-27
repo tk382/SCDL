@@ -30,7 +30,6 @@ from .loss import NB, ZINB
 from .layers import ConstantDispersionLayer, SliceLayer, ElementwiseDense
 from .io import write_text_matrix
 
-
 MeanAct = lambda x: tf.clip_by_value(K.exp(x), 1e-5, 1e6)
 DispAct = lambda x: tf.clip_by_value(tf.nn.softplus(x), 1e-4, 1e4)
 
@@ -72,6 +71,7 @@ class Autoencoder():
         self.nonmissing_indicator = nonmissing_indicator
         self.curve = curve
         self.pi = pi
+       
 
         if self.output_size is None:
             self.output_size = input_size
@@ -84,7 +84,6 @@ class Autoencoder():
     def build(self):
 
         self.input_layer = Input(shape=(self.input_size,), name='count')
-        # self.sf_layer = Input(shape=(1,), name='size_factors')
         last_hidden = self.input_layer
 
         if self.input_dropout > 0.0:
@@ -102,144 +101,51 @@ class Autoencoder():
                 layer_name = 'dec%s' % (i-center_idx)
                 stage = 'decoder'
 
-
             last_hidden = Dense(hid_size, activation=None, kernel_initializer=self.init,name=layer_name)(last_hidden)
-                       
             if self.batchnorm:
               last_hidden = BatchNormalization(center=True, scale=False)(last_hidden)
-
             last_hidden = Activation(self.activation, name='%s_act'%layer_name)(last_hidden)
             if hid_drop > 0.0:
               last_hidden = Dropout(hid_drop, name='%s_drop'%layer_name)(last_hidden)
-
         self.decoder_output = last_hidden
         self.build_output()
-
     def build_output(self):
-
         ## For Gaussian loss
         self.loss = mean_squared_error
         mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
                      name='mean')(self.decoder_output)
         output = ColWiseMultLayer(name='output')([mean])
-
-        # keep unscaled output as an extra model
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
         self.model = Model(inputs=self.input_layer, outputs=output)
-
-
-        ######## ADD WEIGHTS ###########
-
-
     def load_weights(self, filename):
         self.model.load_weights(filename)
-
-
     def predict(self, adata, colnames=None, dimreduce=True, reconstruct=True, error=True):
-
         res = {}
         colnames = adata.var_names.values if colnames is None else colnames
         rownames = adata.obs_names.values
-
         res['mean_norm'] = self.extra_models['mean_norm'].predict(adata.X)
-        
         return res
-
-
-class NBConstantDispAutoencoder(Autoencoder):
-
-    def build_output(self):
-        mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
-                     name='mean')(self.decoder_output)
-
-        # Plug in dispersion parameters via fake dispersion layer
-        disp = ConstantDispersionLayer(name='dispersion')
-        mean = disp(mean)
-
-        # output = ColWiseMultLayer(name='output')([mean, self.sf_layer])
-        output = ColWiseMultLayer(name='output')([mean])
-
-        nb = NB(disp.theta_exp, nonmissing_indicator = self.nonmissing_indicator)
-        self.extra_models['dispersion'] = lambda :K.function([], [nb.theta])([])[0].squeeze()
-        self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
-        self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
-        self.model = Model(inputs=self.input_layer, outputs=output)
-
-
-    def predict(self, adata, colnames=None, **kwargs):
-        colnames = adata.var_names.values if colnames is None else colnames
-        rownames = adata.obs_names.values
-        res = super().predict(adata, colnames=colnames, **kwargs)
-
-        res['dispersion'] = self.extra_models['dispersion']()
-        
-  
-        return res
-
-
-class ZINBConstantDispAutoencoder(Autoencoder):
-
-    def build_output(self):
-        pi = Dense(self.output_size, activation='sigmoid', kernel_initializer=self.init,
-                       kernel_regularizer=l1_l2(self.l1_coef, self.l2_coef),
-                       name='pi')(self.decoder_output)
-
-        mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
-                       kernel_regularizer=l1_l2(self.l1_coef, self.l2_coef),
-                       name='mean')(self.decoder_output)
-
-        # NB dispersion layer
-        disp = ConstantDispersionLayer(name='dispersion')
-        mean = disp(mean)
-
-        output = ColwiseMultLayer([mean])
-
-        zinb = ZINB(pi=pi, theta=disp.theta_exp, ridge_lambda=self.ridge, debug=self.debug)
-        self.loss = zinb.loss
-        self.extra_models['pi'] = Model(inputs=self.input_layer, outputs=pi)
-        self.extra_models['dispersion'] = lambda :K.function([], [zinb.theta])([])[0].squeeze()
-        self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
-        self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
-        self.model = Model(inputs=self.input_layer, outputs=output)
-
-
-    def predict(self, adata, colnames=None, **kwargs):
-        colnames = adata.var_names.values if colnames is None else colnames
-        rownames = adata.obs_names.values
-        res = super().predict(adata, colnames=colnames, **kwargs)
-
-        res['dispersion'] = self.extra_models['dispersion']()
-        res['pi'] = self.extra_models['pi'].predict(adata.X)
-  
-        return res
-
-
 
 class DecayModelAutoencoder(Autoencoder):
-
     def build_output(self):
         curve = self.curve
         curve = tf.cast(curve, tf.float32)
-        mean = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
+        meanlayer = Dense(self.output_size, activation=MeanAct, kernel_initializer=self.init,
                        kernel_regularizer=l1_l2(self.l1_coef, self.l2_coef),
                        name='mean')(self.decoder_output)
-
         disp = ConstantDispersionLayer(name='dispersion')
-        mean = disp(mean)
-        
+        mean = disp(meanlayer)
         pi = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * mean))
         output = ColwiseMultLayer([mean])
-
-        zinb = decayModel(pi = pi, curve = curve, theta=disp.theta_exp, debug=self.debug) #loss function
         
-        self.loss = zinb.loss
+        decayLoss = decayModel(pi = pi, curve = curve, theta=disp.theta_exp, debug=self.debug) 
+        self.loss = decayLoss.loss
         self.curve = self.curve
-        pi = zinb.pi
-        self.extra_models['dispersion'] = lambda :K.function([], [zinb.theta])([])[0].squeeze()
+        pi = decayLoss.pi
+        self.extra_models['dispersion'] = lambda :K.function([], [decayLoss.theta])([])[0].squeeze()
         self.extra_models['mean_norm'] = Model(inputs=self.input_layer, outputs=mean)
         self.extra_models['decoded'] = Model(inputs=self.input_layer, outputs=self.decoder_output)
         self.model = Model(inputs=self.input_layer, outputs=output)
-        
 
     def predict(self, adata, colnames=None, **kwargs):
         colnames = adata.var_names.values if colnames is None else colnames

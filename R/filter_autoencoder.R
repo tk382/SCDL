@@ -55,33 +55,26 @@ autoFilterCV <- function(x,
       x.autoencoder <- t(as.matrix(data.table::fread(paste0(out_dir, 
                                                           "/SAVERX_temp_pred_mean_norm.tsv"), header = F)))
     }
-                 
-    #estimate mu: gene mean after normalizing library size for this training index
-    # est.mu <- Matrix::rowMeans(Matrix::t(Matrix::t(x[, train.idx]) / Matrix::colSums(x[, train.idx])) * 10000)
-    # normalize the library size of the denoised matrix for this training index
-    # est.autoencoder <- Matrix::t(Matrix::t(x.autoencoder$result) * Matrix::colSums(x.test)) / 10000 
+
     est.autoencoder = x.autoencoder$result #32738 x 2179
     rm(x.autoencoder)
     gc()
     
-    # est.const <- est.mu %*% Matrix::t(Matrix::colSums(x.test)) / 10000  #mean prediction, just in case autoencoder performs worse than this
     est.mu = rowMeans(x[,train.idx]) #32738
     est.const = est.mu %*% t(rep(1, length(test.idx)))
-      # rep(1,nrow(x)) %*% t(est.mu)
     
-    err1 <- -Matrix::rowMeans(x.test * log(est.autoencoder + epsilon) - est.autoencoder)  # poisson loss
-    err2 <- -Matrix::rowMeans(x.test * log(est.const + epsilon) - est.const)  # what is this
-    
-    #combine across the 3-way split
+    #likelihood, not error
+    err1 = rowMeans(dpois(as.matrix(x.test), as.matrix(est.autoencoder), log=TRUE)) 
+    err2 = rowMeans(dpois(as.matrix(x.test), as.matrix(est.const), log=TRUE))
+
     err.autoencoder <- err.autoencoder + err1  
     err.const <- err.const + err2
     rm(x.test, est.mu, est.autoencoder, est.const, err1, err2)
     gc()
   }
 
-  # est.mu <- Matrix::rowMeans(Matrix::t(Matrix::t(x) / Matrix::colSums(x)) * 10000)
   est.mu = rowMeans(x)
-  est.const = rowMeans(x)
+  est.const = est.mu %*% t(rep(1, ncol(x)))
   gnames <- rownames(x)
   cnames <- colnames(x)
 
@@ -107,7 +100,7 @@ autoFilterCV <- function(x,
   }
   
   #if autoencder prediction is worse than the mean prediction, replace it mean
-  x.autoencoder$result[err.autoencoder - err.const > 0, ] <- est.mu[err.autoencoder - err.const > 0]
+  x.autoencoder$result[err.autoencoder < err.const, ] <- est.mu[err.autoencoder < err.const]
 
 
   return(list(x.autoencoder = x.autoencoder, 

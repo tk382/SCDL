@@ -16,7 +16,7 @@ sys.stdout.flush()
 
 from .io import read_dataset, normalize, write_text_matrix
 from .train import train
-from .network import NBConstantDispAutoencoder, ZINBConstantDispAutoencoder, DecayModelAutoencoder
+from .network import DecayModelAutoencoder
 from .layers import ConstantDispersionLayer, SliceLayer, ColwiseMultLayer, ElementwiseDense
 
 PiAct = lambda x: tf.clip_by_value(x, 0, 0.95) 
@@ -91,7 +91,6 @@ def autoencode(adata = None,
             nonmissing_indicator = nonmissing_indicator,
             verbose = verbose, verbose_sum = verbose_sum, verbose_fit = verbose_fit)
  
-            
     net.load_weights("%s/weights.hdf5" % out_dir)
     
     if pred_adata or pred_mtx_file:

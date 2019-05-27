@@ -66,9 +66,6 @@ class NB(object):
 
 
 class ZINB(NB):
-    # ZINB is a subclass(?) of NB and there could be no extra work to be done.
-    # *Given pi* this computes the loss. So loss computation remains the same
-    # how do we incoroprate oen extra parameter?
     def __init__(self, pi, ridge_lambda=0.0, scope='zinb_loss/', **kwargs):
         super().__init__(scope = scope, **kwargs)
         self.pi = pi
@@ -112,7 +109,8 @@ class decayModel(NB):
         eps = self.eps
         curve = self.curve
         curve = tf.cast(curve, tf.float32)
-        # self.pi = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * y_pred))
+        self.pi = PiAct(curve[1] * K.exp(curve[0]-K.exp(curve[2]) * y_pred))
+        print(np.sum(y_pred[0, :]))
         with tf.name_scope(self.scope):
             nb_case = super().loss(y_true, y_pred, mean=False) - tf.log(1.0 - self.pi + eps)
             y_true = tf.cast(y_true, tf.float32)
@@ -122,13 +120,14 @@ class decayModel(NB):
             zero_nb = tf.pow(theta/(theta+y_pred+eps), theta)
             zero_case = -tf.log(self.pi + ((1.0 - self.pi) * zero_nb) + eps)
             result = tf.where(tf.less(y_true, 1e-8), zero_case, nb_case)
+            result = tf.reduce_mean(result*self.nonmissing_indicator)
 
-            if mean:
-                nonmissing_indicator = self.nonmissing_indicator
-                if self.masking:
-                    result = reduce_mean(result*nonmissing_indicator)
-                else:
-                    result = tf.reduce_mean(result*nonmissing_indicator)
+            # if mean:
+            #     nonmissing_indicator = self.nonmissing_indicator
+            #     if self.masking:
+            #         result = reduce_mean(result*nonmissing_indicator)
+            #     else:
+            #         result = tf.reduce_mean(result*nonmissing_indicator)
 
             result = _nan2inf(result)
 
